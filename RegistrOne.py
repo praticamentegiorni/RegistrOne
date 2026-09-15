@@ -56,8 +56,9 @@ st.markdown(
 # --- CONNESSIONE GOOGLE SHEETS (st-gsheets-connection) ---
 def get_gsheets_connection():
   try:
-    # Usiamo il tipo standard fornito da st-gsheets-connection ('gsheets')
-    return st.connection("gsheets", type="GSheetsConnection")
+    from streamlit_gsheets import GSheetsConnection
+
+    return st.connection("gsheets", type=GSheetsConnection)
   except Exception as e:
     st.error(f"Errore di connessione a Google Sheets: {e}")
     return None
