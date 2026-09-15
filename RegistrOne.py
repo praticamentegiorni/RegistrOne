@@ -5,7 +5,11 @@ import pandas as pd
 import streamlit as st
 
 # Impostazione pagina
-st.set_page_config(page_title="RegistrOne - Registro di Classe", layout="wide")
+st.set_page_config(
+    page_title="RegistrOne - Registro di Classe",
+    page_icon="📚",
+    layout="wide",
+)
 
 # CSS PERSONALIZZATO IDENTICO AD AGENDONE PER MANTENERE COERENZA GRAFICA
 st.markdown(
@@ -70,7 +74,7 @@ def carica_dati_gsheets():
   if not conn:
     return None
   try:
-    # Legge i vari fogli di lavoro con tutte le colonne
+    # Legge i vari fogli di lavoro con ttl=0 per evitare letture da cache obsoleta
     classi_df = conn.read(worksheet="Classi", ttl=0)
     materie_df = conn.read(worksheet="Materie", ttl=0)
     scuole_df = conn.read(worksheet="Scuole", ttl=0)
@@ -80,26 +84,40 @@ def carica_dati_gsheets():
     note_df = conn.read(worksheet="Note", ttl=0)
 
     # Pulizia righe completamente vuote o con NaN su ID/campi chiave
-    if not alunni_df.empty:
+    if not isinstance(alunni_df, pd.DataFrame):
+      alunni_df = pd.DataFrame()
+    elif not alunni_df.empty and "id" in alunni_df.columns:
       alunni_df = alunni_df.dropna(subset=["id"])
 
     return {
-        "classi_df": classi_df,
-        "materie_df": materie_df,
-        "scuole_df": scuole_df,
+        "classi_df": classi_df
+        if isinstance(classi_df, pd.DataFrame)
+        else pd.DataFrame(),
+        "materie_df": materie_df
+        if isinstance(materie_df, pd.DataFrame)
+        else pd.DataFrame(),
+        "scuole_df": scuole_df
+        if isinstance(scuole_df, pd.DataFrame)
+        else pd.DataFrame(),
         "classi": (
             classi_df["Classe"].dropna().astype(str).tolist()
-            if not classi_df.empty and "Classe" in classi_df.columns
+            if isinstance(classi_df, pd.DataFrame)
+            and not classi_df.empty
+            and "Classe" in classi_df.columns
             else []
         ),
         "materie": (
             materie_df["Materia"].dropna().astype(str).tolist()
-            if not materie_df.empty and "Materia" in materie_df.columns
+            if isinstance(materie_df, pd.DataFrame)
+            and not materie_df.empty
+            and "Materia" in materie_df.columns
             else ["Informatica", "Laboratorio", "Sistemi e Reti"]
         ),
         "scuole_provenienza": (
             scuole_df["Scuola"].dropna().astype(str).tolist()
-            if not scuole_df.empty and "Scuola" in scuole_df.columns
+            if isinstance(scuole_df, pd.DataFrame)
+            and not scuole_df.empty
+            and "Scuola" in scuole_df.columns
             else [
                 "Scuola Media Statale",
                 "Altro Istituto Professionale",
@@ -108,16 +126,24 @@ def carica_dati_gsheets():
         ),
         "alunni": (
             alunni_df.to_dict(orient="records")
-            if not alunni_df.empty
+            if isinstance(alunni_df, pd.DataFrame) and not alunni_df.empty
             else []
         ),
         "presenze": (
             presenze_df.to_dict(orient="records")
-            if not presenze_df.empty
+            if isinstance(presenze_df, pd.DataFrame) and not presenze_df.empty
             else []
         ),
-        "voti": voti_df.to_dict(orient="records") if not voti_df.empty else [],
-        "note": note_df.to_dict(orient="records") if not note_df.empty else [],
+        "voti": (
+            voti_df.to_dict(orient="records")
+            if isinstance(voti_df, pd.DataFrame) and not voti_df.empty
+            else []
+        ),
+        "note": (
+            note_df.to_dict(orient="records")
+            if isinstance(note_df, pd.DataFrame) and not note_df.empty
+            else []
+        ),
     }
   except Exception as e:
     st.error(f"Errore di lettura da Google Sheets: {e}")
@@ -155,31 +181,34 @@ def salva_dati(data):
     return
 
   try:
-    # 1. Classi: preserva eventuale colonna 'nome_classe' se esistente
+    # 1. Classi
     df_classi_old = data.get("classi_df", pd.DataFrame())
     df_classi_new = pd.DataFrame({"Classe": data["classi"]})
-    if "nome_classe" in df_classi_old.columns:
+    if (
+        isinstance(df_classi_old, pd.DataFrame)
+        and "nome_classe" in df_classi_old.columns
+    ):
       df_classi_new["nome_classe"] = df_classi_new["Classe"]
     conn.update(worksheet="Classi", data=df_classi_new)
 
-    # 2. Materie: preserva Docente e CoDocente se presenti nel DB originale
+    # 2. Materie
     df_mat_old = data.get("materie_df", pd.DataFrame())
     df_mat_new = pd.DataFrame({"Materia": data["materie"]})
-    if not df_mat_old.empty:
-      df_mat_new = pd.merge(
-          df_mat_new,
-          df_mat_old[["Materia", "Docente", "CoDocente"]]
-          if "Docente" in df_mat_old.columns
-          else df_mat_old,
-          on="Materia",
-          how="left",
-      )
+    if isinstance(df_mat_old, pd.DataFrame) and not df_mat_old.empty:
+      extra_cols = [c for c in ["Docente", "CoDocente"] if c in df_mat_old.columns]
+      if extra_cols:
+        df_mat_new = pd.merge(
+            df_mat_new,
+            df_mat_old[["Materia"] + extra_cols],
+            on="Materia",
+            how="left",
+        )
     conn.update(worksheet="Materie", data=df_mat_new)
 
-    # 3. Scuole: preserva Comune, Provincia, Telefono, Email se presenti
+    # 3. Scuole
     df_scuole_old = data.get("scuole_df", pd.DataFrame())
     df_scuole_new = pd.DataFrame({"Scuola": data["scuole_provenienza"]})
-    if not df_scuole_old.empty:
+    if isinstance(df_scuole_old, pd.DataFrame) and not df_scuole_old.empty:
       extra_cols = [
           c
           for c in [
@@ -201,9 +230,8 @@ def salva_dati(data):
     conn.update(worksheet="Scuole", data=df_scuole_new)
 
     # 4. Alunni
-    conn.update(
-        worksheet="Alunni",
-        data=pd.DataFrame(data["alunni"])
+    df_alunni = (
+        pd.DataFrame(data["alunni"])
         if data["alunni"]
         else pd.DataFrame(
             columns=[
@@ -223,36 +251,35 @@ def salva_dati(data):
                 "dettagli_apprendimento",
                 "nota_testo",
             ]
-        ),
+        )
     )
+    conn.update(worksheet="Alunni", data=df_alunni)
 
     # 5. Presenze
-    conn.update(
-        worksheet="Presenze",
-        data=pd.DataFrame(data["presenze"])
+    df_presenze = (
+        pd.DataFrame(data["presenze"])
         if data["presenze"]
-        else pd.DataFrame(columns=["alunno_id", "data", "stato"]),
+        else pd.DataFrame(columns=["alunno_id", "data", "stato"])
     )
+    conn.update(worksheet="Presenze", data=df_presenze)
 
     # 6. Voti
-    conn.update(
-        worksheet="Voti",
-        data=pd.DataFrame(data["voti"])
+    df_voti = (
+        pd.DataFrame(data["voti"])
         if data["voti"]
         else pd.DataFrame(
             columns=["alunno_id", "materia", "voto", "data", "nota_voto"]
-        ),
+        )
     )
+    conn.update(worksheet="Voti", data=df_voti)
 
     # 7. Note
-    conn.update(
-        worksheet="Note",
-        data=pd.DataFrame(data["note"])
+    df_note = (
+        pd.DataFrame(data["note"])
         if data["note"]
-        else pd.DataFrame(
-            columns=["alunno_id", "tipo", "descrizione", "data"]
-        ),
+        else pd.DataFrame(columns=["alunno_id", "tipo", "descrizione", "data"])
     )
+    conn.update(worksheet="Note", data=df_note)
 
     st.cache_data.clear()
   except Exception as e:
