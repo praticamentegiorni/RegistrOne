@@ -70,16 +70,23 @@ def carica_dati_gsheets():
   if not conn:
     return None
   try:
-    # Legge i vari fogli di lavoro
-    classi_df = conn.read(worksheet="Classi", usecols=[0], ttl=0)
-    materie_df = conn.read(worksheet="Materie", usecols=[0], ttl=0)
-    scuole_df = conn.read(worksheet="Scuole", usecols=[0], ttl=0)
+    # Legge i vari fogli di lavoro con tutte le colonne
+    classi_df = conn.read(worksheet="Classi", ttl=0)
+    materie_df = conn.read(worksheet="Materie", ttl=0)
+    scuole_df = conn.read(worksheet="Scuole", ttl=0)
     alunni_df = conn.read(worksheet="Alunni", ttl=0)
     presenze_df = conn.read(worksheet="Presenze", ttl=0)
     voti_df = conn.read(worksheet="Voti", ttl=0)
     note_df = conn.read(worksheet="Note", ttl=0)
 
+    # Pulizia righe completamente vuote o con NaN su ID/campi chiave
+    if not alunni_df.empty:
+      alunni_df = alunni_df.dropna(subset=["id"])
+
     return {
+        "classi_df": classi_df,
+        "materie_df": materie_df,
+        "scuole_df": scuole_df,
         "classi": (
             classi_df["Classe"].dropna().astype(str).tolist()
             if not classi_df.empty and "Classe" in classi_df.columns
@@ -113,7 +120,20 @@ def carica_dati_gsheets():
         "note": note_df.to_dict(orient="records") if not note_df.empty else [],
     }
   except Exception as e:
+    st.error(f"Errore di lettura da Google Sheets: {e}")
     return {
+        "classi_df": pd.DataFrame(columns=["Classe", "nome_classe"]),
+        "materie_df": pd.DataFrame(columns=["Materia", "Docente", "CoDocente"]),
+        "scuole_df": pd.DataFrame(
+            columns=[
+                "Scuola",
+                "Comune",
+                "Provincia",
+                "Telefono",
+                "Telefono2",
+                "Email",
+            ]
+        ),
         "classi": [],
         "materie": ["Informatica", "Laboratorio", "Sistemi e Reti"],
         "scuole_provenienza": [
@@ -135,16 +155,52 @@ def salva_dati(data):
     return
 
   try:
-    conn.update(
-        worksheet="Classi", data=pd.DataFrame({"Classe": data["classi"]})
-    )
-    conn.update(
-        worksheet="Materie", data=pd.DataFrame({"Materia": data["materie"]})
-    )
-    conn.update(
-        worksheet="Scuole",
-        data=pd.DataFrame({"Scuola": data["scuole_provenienza"]}),
-    )
+    # 1. Classi: preserva eventuale colonna 'nome_classe' se esistente
+    df_classi_old = data.get("classi_df", pd.DataFrame())
+    df_classi_new = pd.DataFrame({"Classe": data["classi"]})
+    if "nome_classe" in df_classi_old.columns:
+      df_classi_new["nome_classe"] = df_classi_new["Classe"]
+    conn.update(worksheet="Classi", data=df_classi_new)
+
+    # 2. Materie: preserva Docente e CoDocente se presenti nel DB originale
+    df_mat_old = data.get("materie_df", pd.DataFrame())
+    df_mat_new = pd.DataFrame({"Materia": data["materie"]})
+    if not df_mat_old.empty:
+      df_mat_new = pd.merge(
+          df_mat_new,
+          df_mat_old[["Materia", "Docente", "CoDocente"]]
+          if "Docente" in df_mat_old.columns
+          else df_mat_old,
+          on="Materia",
+          how="left",
+      )
+    conn.update(worksheet="Materie", data=df_mat_new)
+
+    # 3. Scuole: preserva Comune, Provincia, Telefono, Email se presenti
+    df_scuole_old = data.get("scuole_df", pd.DataFrame())
+    df_scuole_new = pd.DataFrame({"Scuola": data["scuole_provenienza"]})
+    if not df_scuole_old.empty:
+      extra_cols = [
+          c
+          for c in [
+              "Comune",
+              "Provincia",
+              "Telefono",
+              "Telefono2",
+              "Email",
+          ]
+          if c in df_scuole_old.columns
+      ]
+      if extra_cols:
+        df_scuole_new = pd.merge(
+            df_scuole_new,
+            df_scuole_old[["Scuola"] + extra_cols],
+            on="Scuola",
+            how="left",
+        )
+    conn.update(worksheet="Scuole", data=df_scuole_new)
+
+    # 4. Alunni
     conn.update(
         worksheet="Alunni",
         data=pd.DataFrame(data["alunni"])
@@ -169,12 +225,16 @@ def salva_dati(data):
             ]
         ),
     )
+
+    # 5. Presenze
     conn.update(
         worksheet="Presenze",
         data=pd.DataFrame(data["presenze"])
         if data["presenze"]
         else pd.DataFrame(columns=["alunno_id", "data", "stato"]),
     )
+
+    # 6. Voti
     conn.update(
         worksheet="Voti",
         data=pd.DataFrame(data["voti"])
@@ -183,6 +243,8 @@ def salva_dati(data):
             columns=["alunno_id", "materia", "voto", "data", "nota_voto"]
         ),
     )
+
+    # 7. Note
     conn.update(
         worksheet="Note",
         data=pd.DataFrame(data["note"])
@@ -366,9 +428,7 @@ with tabs[1]:
               "scuola_prec": scuola_prec if altra_scuola else "",
               "parla_italiano": parla_italiano,
               "provenienza_orig": provenienza_orig,
-              "famiglia_comunita": familia_comunita
-              if "famiglia_comunita" in locals()
-              else famiglia_comunita,
+              "famiglia_comunita": famiglia_comunita,
               "problemi_apprendimento": problemi_apprendimento,
               "dettagli_apprendimento": dettagli_app
               if problemi_apprendimento
