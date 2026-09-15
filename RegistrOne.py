@@ -1,15 +1,13 @@
-import datetime
+[cite: 2]import datetime
 import json
+import gspread
+from google.oauth2.service_account import Credentials
 import os
 import pandas as pd
 import streamlit as st
 
 # Impostazione pagina
-st.set_page_config(
-    page_title="RegistrOne - Registro di Classe",
-    page_icon="📚",
-    layout="wide",
-)
+st.set_page_config(page_title="RegistrOne - Registro di Classe", layout="wide")
 
 # CSS PERSONALIZZATO IDENTICO AD AGENDONE PER MANTENERE COERENZA GRAFICA
 st.markdown(
@@ -57,67 +55,67 @@ st.markdown(
 )
 
 
-# --- CONNESSIONE GOOGLE SHEETS (st-gsheets-connection) ---
-def get_gsheets_connection():
+# --- CONNESSIONE DIRETTA CON GSPREAD E GOOGLE AUTH ---
+def get_gspread_client():
   try:
-    from streamlit_gsheets import GSheetsConnection
-
-    return st.connection("gsheets", type=GSheetsConnection)
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client
   except Exception as e:
-    st.error(f"Errore di connessione a Google Sheets: {e}")
+    st.error(f"Errore di autenticazione Google Auth: {e}")
     return None
 
 
 @st.cache_data(ttl=60)
 def carica_dati_gsheets():
-  conn = get_gsheets_connection()
-  if not conn:
+  client = get_gspread_client()
+  if not client:
     return None
   try:
-    # Legge i vari fogli di lavoro con ttl=0 per evitare letture da cache obsoleta
-    classi_df = conn.read(worksheet="Classi", ttl=0)
-    materie_df = conn.read(worksheet="Materie", ttl=0)
-    scuole_df = conn.read(worksheet="Scuole", ttl=0)
-    alunni_df = conn.read(worksheet="Alunni", ttl=0)
-    presenze_df = conn.read(worksheet="Presenze", ttl=0)
-    voti_df = conn.read(worksheet="Voti", ttl=0)
-    note_df = conn.read(worksheet="Note", ttl=0)
+    spreadsheet_id = "1B-ML5iAnnJC53t5ckSv5RDo4nOg3XH63-_WjJumMaVU"
+    sh = client.open_by_key(spreadsheet_id)
 
-    # Pulizia righe completamente vuote o con NaN su ID/campi chiave
-    if not isinstance(alunni_df, pd.DataFrame):
-      alunni_df = pd.DataFrame()
-    elif not alunni_df.empty and "id" in alunni_df.columns:
+    def read_ws(nome_foglio):
+      try:
+        ws = sh.worksheet(nome_foglio)
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
+      except Exception:
+        return pd.DataFrame()
+
+    classi_df = read_ws("Classi")
+    materie_df = read_ws("Materie")
+    scuole_df = read_ws("Scuole")
+    alunni_df = read_ws("Alunni")
+    presenze_df = read_ws("Presenze")
+    voti_df = read_ws("Voti")
+    note_df = read_ws("Note")
+
+    if not alunni_df.empty and "id" in alunni_df.columns:
       alunni_df = alunni_df.dropna(subset=["id"])
 
     return {
-        "classi_df": classi_df
-        if isinstance(classi_df, pd.DataFrame)
-        else pd.DataFrame(),
-        "materie_df": materie_df
-        if isinstance(materie_df, pd.DataFrame)
-        else pd.DataFrame(),
-        "scuole_df": scuole_df
-        if isinstance(scuole_df, pd.DataFrame)
-        else pd.DataFrame(),
+        "classi_df": classi_df,
+        "materie_df": materie_df,
+        "scuole_df": scuole_df,
         "classi": (
             classi_df["Classe"].dropna().astype(str).tolist()
-            if isinstance(classi_df, pd.DataFrame)
-            and not classi_df.empty
-            and "Classe" in classi_df.columns
+            if not classi_df.empty and "Classe" in classi_df.columns
             else []
         ),
         "materie": (
             materie_df["Materia"].dropna().astype(str).tolist()
-            if isinstance(materie_df, pd.DataFrame)
-            and not materie_df.empty
-            and "Materia" in materie_df.columns
+            if not materie_df.empty and "Materia" in materie_df.columns
             else ["Informatica", "Laboratorio", "Sistemi e Reti"]
         ),
         "scuole_provenienza": (
             scuole_df["Scuola"].dropna().astype(str).tolist()
-            if isinstance(scuole_df, pd.DataFrame)
-            and not scuole_df.empty
-            and "Scuola" in scuole_df.columns
+            if not scuole_df.empty and "Scuola" in scuole_df.columns
             else [
                 "Scuola Media Statale",
                 "Altro Istituto Professionale",
@@ -126,27 +124,19 @@ def carica_dati_gsheets():
         ),
         "alunni": (
             alunni_df.to_dict(orient="records")
-            if isinstance(alunni_df, pd.DataFrame) and not alunni_df.empty
+            if not alunni_df.empty
             else []
         ),
         "presenze": (
             presenze_df.to_dict(orient="records")
-            if isinstance(presenze_df, pd.DataFrame) and not presenze_df.empty
+            if not presenze_df.empty
             else []
         ),
-        "voti": (
-            voti_df.to_dict(orient="records")
-            if isinstance(voti_df, pd.DataFrame) and not voti_df.empty
-            else []
-        ),
-        "note": (
-            note_df.to_dict(orient="records")
-            if isinstance(note_df, pd.DataFrame) and not note_df.empty
-            else []
-        ),
+        "voti": voti_df.to_dict(orient="records") if not voti_df.empty else [],
+        "note": note_df.to_dict(orient="records") if not note_df.empty else [],
     }
   except Exception as e:
-    st.error(f"Errore di lettura da Google Sheets: {e}")
+    st.error(f"Errore di lettura dei fogli con gspread: {e}")
     return {
         "classi_df": pd.DataFrame(columns=["Classe", "nome_classe"]),
         "materie_df": pd.DataFrame(columns=["Materia", "Docente", "CoDocente"]),
@@ -175,26 +165,39 @@ def carica_dati_gsheets():
 
 
 def salva_dati(data):
-  conn = get_gsheets_connection()
-  if not conn:
-    st.error("Impossibile salvare: connessione non disponibile.")
+  client = get_gspread_client()
+  if not client:
+    st.error("Impossibile salvare: client non disponibile.")
     return
 
   try:
+    spreadsheet_id = "1B-ML5iAnnJC53t5ckSv5RDo4nOg3XH63-_WjJumMaVU"
+    sh = client.open_by_key(spreadsheet_id)
+
+    def write_ws(nome_foglio, df):
+      try:
+        ws = sh.worksheet(nome_foglio)
+      except Exception:
+        ws = sh.add_worksheet(title=nome_foglio, rows=100, cols=20)
+      ws.clear()
+      if not df.empty:
+        ws.update(
+            [df.columns.values.tolist()] + df.fillna("").values.tolist()
+        )
+      else:
+        ws.update([[]])
+
     # 1. Classi
     df_classi_old = data.get("classi_df", pd.DataFrame())
     df_classi_new = pd.DataFrame({"Classe": data["classi"]})
-    if (
-        isinstance(df_classi_old, pd.DataFrame)
-        and "nome_classe" in df_classi_old.columns
-    ):
+    if "nome_classe" in df_classi_old.columns:
       df_classi_new["nome_classe"] = df_classi_new["Classe"]
-    conn.update(worksheet="Classi", data=df_classi_new)
+    write_ws("Classi", df_classi_new)
 
     # 2. Materie
     df_mat_old = data.get("materie_df", pd.DataFrame())
     df_mat_new = pd.DataFrame({"Materia": data["materie"]})
-    if isinstance(df_mat_old, pd.DataFrame) and not df_mat_old.empty:
+    if not df_mat_old.empty:
       extra_cols = [c for c in ["Docente", "CoDocente"] if c in df_mat_old.columns]
       if extra_cols:
         df_mat_new = pd.merge(
@@ -203,12 +206,12 @@ def salva_dati(data):
             on="Materia",
             how="left",
         )
-    conn.update(worksheet="Materie", data=df_mat_new)
+    write_ws("Materie", df_mat_new)
 
     # 3. Scuole
     df_scuole_old = data.get("scuole_df", pd.DataFrame())
     df_scuole_new = pd.DataFrame({"Scuola": data["scuole_provenienza"]})
-    if isinstance(df_scuole_old, pd.DataFrame) and not df_scuole_old.empty:
+    if not df_scuole_old.empty:
       extra_cols = [
           c
           for c in [
@@ -227,7 +230,7 @@ def salva_dati(data):
             on="Scuola",
             how="left",
         )
-    conn.update(worksheet="Scuole", data=df_scuole_new)
+    write_ws("Scuole", df_scuole_new)
 
     # 4. Alunni
     df_alunni = (
@@ -253,7 +256,7 @@ def salva_dati(data):
             ]
         )
     )
-    conn.update(worksheet="Alunni", data=df_alunni)
+    write_ws("Alunni", df_alunni)
 
     # 5. Presenze
     df_presenze = (
@@ -261,7 +264,7 @@ def salva_dati(data):
         if data["presenze"]
         else pd.DataFrame(columns=["alunno_id", "data", "stato"])
     )
-    conn.update(worksheet="Presenze", data=df_presenze)
+    write_ws("Presenze", df_presenze)
 
     # 6. Voti
     df_voti = (
@@ -271,19 +274,21 @@ def salva_dati(data):
             columns=["alunno_id", "materia", "voto", "data", "nota_voto"]
         )
     )
-    conn.update(worksheet="Voti", data=df_voti)
+    write_ws("Voti", df_voti)
 
     # 7. Note
     df_note = (
         pd.DataFrame(data["note"])
         if data["note"]
-        else pd.DataFrame(columns=["alunno_id", "tipo", "descrizione", "data"])
+        else pd.DataFrame(
+            columns=["alunno_id", "tipo", "descrizione", "data"]
+        )
     )
-    conn.update(worksheet="Note", data=df_note)
+    write_ws("Note", df_note)
 
     st.cache_data.clear()
   except Exception as e:
-    st.error(f"Errore durante il salvataggio su Google Sheets: {e}")
+    st.error(f"Errore durante il salvataggio con gspread: {e}")
 
 
 db = carica_dati_gsheets()
