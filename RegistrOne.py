@@ -1,4 +1,4 @@
-[cite: 2]import datetime
+import datetime
 import json
 import gspread
 from google.oauth2.service_account import Credentials
